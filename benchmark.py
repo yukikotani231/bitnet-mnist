@@ -1,0 +1,256 @@
+"""
+BitNet vs Standard Linear Benchmark
+精度と速度の比較
+"""
+
+import time
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+
+from bitnet_mnist import BitLinear, RMSNorm, BitNetMNIST
+
+
+# =============================================================================
+# 通常のLinearを使ったMNISTモデル（比較用）
+# =============================================================================
+
+class StandardMNIST(nn.Module):
+    """通常のnn.Linearを使用したMNIST分類器"""
+
+    def __init__(self, hidden_dim: int = 512):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.layers = nn.Sequential(
+            nn.Linear(784, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+
+            nn.Linear(hidden_dim, 10),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.flatten(x)
+        return self.layers(x)
+
+
+# =============================================================================
+# ベンチマーク関数
+# =============================================================================
+
+def train_epoch(model, loader, optimizer, device):
+    model.train()
+    total_loss = 0.0
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = F.cross_entropy(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(loader)
+
+
+def evaluate(model, loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+    return 100.0 * correct / total
+
+
+def benchmark_inference(model, loader, device, num_runs=3):
+    """推論速度のベンチマーク"""
+    model.eval()
+
+    # ウォームアップ
+    with torch.no_grad():
+        for images, _ in loader:
+            images = images.to(device)
+            _ = model(images)
+            break
+
+    # 計測
+    times = []
+    for _ in range(num_runs):
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+        start = time.perf_counter()
+        with torch.no_grad():
+            for images, _ in loader:
+                images = images.to(device)
+                _ = model(images)
+
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+        elapsed = time.perf_counter() - start
+        times.append(elapsed)
+
+    return sum(times) / len(times)
+
+
+def benchmark_training(model, loader, optimizer, device, num_epochs=1):
+    """学習速度のベンチマーク"""
+    model.train()
+
+    # ウォームアップ
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = F.cross_entropy(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        break
+
+    # 計測
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    for _ in range(num_epochs):
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = F.cross_entropy(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+    return time.perf_counter() - start
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters())
+
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    print()
+
+    # データ
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+
+    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=2)
+
+    hidden_dim = 512
+    epochs = 5
+    lr = 1e-3
+
+    # ==========================================================================
+    # BitNet モデル
+    # ==========================================================================
+    print("=" * 70)
+    print("BitNet Model")
+    print("=" * 70)
+
+    bitnet_model = BitNetMNIST(hidden_dim=hidden_dim).to(device)
+    bitnet_optimizer = torch.optim.AdamW(bitnet_model.parameters(), lr=lr, weight_decay=0.01)
+
+    print(f"Parameters: {count_parameters(bitnet_model):,}")
+
+    # 学習
+    print(f"\nTraining for {epochs} epochs...")
+    train_start = time.perf_counter()
+    for epoch in range(1, epochs + 1):
+        loss = train_epoch(bitnet_model, train_loader, bitnet_optimizer, device)
+        acc = evaluate(bitnet_model, test_loader, device)
+        print(f"  Epoch {epoch}: Loss={loss:.4f}, Acc={acc:.2f}%")
+
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    bitnet_train_time = time.perf_counter() - train_start
+
+    bitnet_acc = evaluate(bitnet_model, test_loader, device)
+    bitnet_infer_time = benchmark_inference(bitnet_model, test_loader, device)
+
+    # ==========================================================================
+    # Standard モデル
+    # ==========================================================================
+    print()
+    print("=" * 70)
+    print("Standard Model (nn.Linear)")
+    print("=" * 70)
+
+    standard_model = StandardMNIST(hidden_dim=hidden_dim).to(device)
+    standard_optimizer = torch.optim.AdamW(standard_model.parameters(), lr=lr, weight_decay=0.01)
+
+    print(f"Parameters: {count_parameters(standard_model):,}")
+
+    # 学習
+    print(f"\nTraining for {epochs} epochs...")
+    train_start = time.perf_counter()
+    for epoch in range(1, epochs + 1):
+        loss = train_epoch(standard_model, train_loader, standard_optimizer, device)
+        acc = evaluate(standard_model, test_loader, device)
+        print(f"  Epoch {epoch}: Loss={loss:.4f}, Acc={acc:.2f}%")
+
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    standard_train_time = time.perf_counter() - train_start
+
+    standard_acc = evaluate(standard_model, test_loader, device)
+    standard_infer_time = benchmark_inference(standard_model, test_loader, device)
+
+    # ==========================================================================
+    # 結果比較
+    # ==========================================================================
+    print()
+    print("=" * 70)
+    print("COMPARISON RESULTS")
+    print("=" * 70)
+    print()
+    print(f"{'Metric':<25} {'BitNet':>15} {'Standard':>15} {'Ratio':>15}")
+    print("-" * 70)
+    print(f"{'Test Accuracy (%)':<25} {bitnet_acc:>15.2f} {standard_acc:>15.2f} {'-':>15}")
+    print(f"{'Training Time (s)':<25} {bitnet_train_time:>15.2f} {standard_train_time:>15.2f} {bitnet_train_time/standard_train_time:>15.2f}x")
+    print(f"{'Inference Time (s)':<25} {bitnet_infer_time:>15.3f} {standard_infer_time:>15.3f} {bitnet_infer_time/standard_infer_time:>15.2f}x")
+    print()
+
+    # メモリ使用量（理論値）
+    bitnet_params = count_parameters(bitnet_model)
+    standard_params = count_parameters(standard_model)
+
+    bitnet_fp32_size = bitnet_params * 4 / 1024  # KB
+    bitnet_ternary_size = bitnet_params * 2 / 8 / 1024  # KB (2bit per weight)
+    standard_fp32_size = standard_params * 4 / 1024  # KB
+
+    print(f"{'Memory (FP32, KB)':<25} {bitnet_fp32_size:>15.1f} {standard_fp32_size:>15.1f}")
+    print(f"{'Memory (Quantized, KB)':<25} {bitnet_ternary_size:>15.1f} {'-':>15}")
+    print(f"{'Compression Ratio':<25} {bitnet_fp32_size/bitnet_ternary_size:>15.1f}x {'-':>15}")
+    print()
+
+    print("NOTE: BitNet is slower in PyTorch because:")
+    print("  - Quantization happens at runtime (not optimized)")
+    print("  - No custom CUDA kernels for ternary operations")
+    print("  - Real speedup requires bitnet.cpp or custom kernels")
+
+
+if __name__ == "__main__":
+    main()
