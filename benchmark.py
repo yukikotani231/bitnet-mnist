@@ -1,5 +1,5 @@
 """
-BitNet vs Standard Linear Benchmark
+BitNet vs Standard Linear vs Triton Benchmark
 精度と速度の比較
 """
 
@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 from bitnet_mnist import BitLinear, RMSNorm, BitNetMNIST
+from bitnet_triton import BitLinearTriton
 
 
 # =============================================================================
@@ -38,6 +39,55 @@ class StandardMNIST(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.flatten(x)
         return self.layers(x)
+
+
+# =============================================================================
+# Triton版BitNet MNISTモデル
+# =============================================================================
+
+class BitNetMNISTTriton(nn.Module):
+    """BitLinearTritonを使用したMNIST分類器"""
+
+    def __init__(self, hidden_dim: int = 512):
+        super().__init__()
+        self.flatten = nn.Flatten()
+
+        self.layers = nn.Sequential(
+            BitLinearTriton(784, hidden_dim),
+            RMSNorm(hidden_dim),
+            nn.GELU(),
+
+            BitLinearTriton(hidden_dim, hidden_dim),
+            RMSNorm(hidden_dim),
+            nn.GELU(),
+
+            BitLinearTriton(hidden_dim, 10),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.flatten(x)
+        return self.layers(x)
+
+    def pack_weights(self):
+        """Pack all BitLinearTriton layers for inference"""
+        for module in self.modules():
+            if isinstance(module, BitLinearTriton):
+                module.pack_weights()
+
+    @classmethod
+    def from_bitnet(cls, bitnet_model: BitNetMNIST) -> 'BitNetMNISTTriton':
+        """Convert BitNetMNIST to BitNetMNISTTriton"""
+        hidden_dim = bitnet_model.layers[0].out_features
+        triton_model = cls(hidden_dim=hidden_dim)
+
+        # Copy weights from BitLinear to BitLinearTriton
+        src_layers = [m for m in bitnet_model.modules() if isinstance(m, BitLinear)]
+        dst_layers = [m for m in triton_model.modules() if isinstance(m, BitLinearTriton)]
+
+        for src, dst in zip(src_layers, dst_layers):
+            dst.weight.data.copy_(src.weight.data)
+
+        return triton_model
 
 
 # =============================================================================
@@ -145,6 +195,8 @@ def count_parameters(model):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    if device.type == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
     print()
 
     # データ
@@ -164,10 +216,10 @@ def main():
     lr = 1e-3
 
     # ==========================================================================
-    # BitNet モデル
+    # BitNet モデル（学習）
     # ==========================================================================
     print("=" * 70)
-    print("BitNet Model")
+    print("BitNet Model (Training with STE)")
     print("=" * 70)
 
     bitnet_model = BitNetMNIST(hidden_dim=hidden_dim).to(device)
@@ -191,11 +243,29 @@ def main():
     bitnet_infer_time = benchmark_inference(bitnet_model, test_loader, device)
 
     # ==========================================================================
-    # Standard モデル
+    # BitNet Triton モデル（推論）
     # ==========================================================================
     print()
     print("=" * 70)
-    print("Standard Model (nn.Linear)")
+    print("BitNet Triton Model (Inference with Triton Kernels)")
+    print("=" * 70)
+
+    # 学習済みBitNetモデルからTritonモデルへ変換
+    triton_model = BitNetMNISTTriton.from_bitnet(bitnet_model).to(device)
+    triton_model.pack_weights()  # 重みをパック
+
+    triton_acc = evaluate(triton_model, test_loader, device)
+    print(f"Accuracy after packing: {triton_acc:.2f}%")
+
+    triton_infer_time = benchmark_inference(triton_model, test_loader, device)
+    print(f"Inference time: {triton_infer_time:.3f}s")
+
+    # ==========================================================================
+    # Standard モデル（比較用）
+    # ==========================================================================
+    print()
+    print("=" * 70)
+    print("Standard Model (nn.Linear, FP32)")
     print("=" * 70)
 
     standard_model = StandardMNIST(hidden_dim=hidden_dim).to(device)
@@ -226,30 +296,82 @@ def main():
     print("COMPARISON RESULTS")
     print("=" * 70)
     print()
-    print(f"{'Metric':<25} {'BitNet':>15} {'Standard':>15} {'Ratio':>15}")
+    print(f"{'Metric':<25} {'BitNet STE':>12} {'BitNet Triton':>14} {'Standard':>12}")
     print("-" * 70)
-    print(f"{'Test Accuracy (%)':<25} {bitnet_acc:>15.2f} {standard_acc:>15.2f} {'-':>15}")
-    print(f"{'Training Time (s)':<25} {bitnet_train_time:>15.2f} {standard_train_time:>15.2f} {bitnet_train_time/standard_train_time:>15.2f}x")
-    print(f"{'Inference Time (s)':<25} {bitnet_infer_time:>15.3f} {standard_infer_time:>15.3f} {bitnet_infer_time/standard_infer_time:>15.2f}x")
+    print(f"{'Test Accuracy (%)':<25} {bitnet_acc:>12.2f} {triton_acc:>14.2f} {standard_acc:>12.2f}")
+    print(f"{'Training Time (s)':<25} {bitnet_train_time:>12.2f} {'N/A':>14} {standard_train_time:>12.2f}")
+    print(f"{'Inference Time (s)':<25} {bitnet_infer_time:>12.3f} {triton_infer_time:>14.3f} {standard_infer_time:>12.3f}")
+    print()
+
+    # スピードアップ計算
+    print("Speedup Analysis:")
+    print(f"  Triton vs BitNet STE:  {bitnet_infer_time / triton_infer_time:.2f}x")
+    print(f"  Triton vs Standard:    {standard_infer_time / triton_infer_time:.2f}x")
     print()
 
     # メモリ使用量（理論値）
     bitnet_params = count_parameters(bitnet_model)
     standard_params = count_parameters(standard_model)
 
-    bitnet_fp32_size = bitnet_params * 4 / 1024  # KB
-    bitnet_ternary_size = bitnet_params * 2 / 8 / 1024  # KB (2bit per weight)
+    fp32_size = bitnet_params * 4 / 1024  # KB
+    ternary_size = bitnet_params * 2 / 8 / 1024  # KB (2bit per weight)
     standard_fp32_size = standard_params * 4 / 1024  # KB
 
-    print(f"{'Memory (FP32, KB)':<25} {bitnet_fp32_size:>15.1f} {standard_fp32_size:>15.1f}")
-    print(f"{'Memory (Quantized, KB)':<25} {bitnet_ternary_size:>15.1f} {'-':>15}")
-    print(f"{'Compression Ratio':<25} {bitnet_fp32_size/bitnet_ternary_size:>15.1f}x {'-':>15}")
+    print("Memory Usage (theoretical):")
+    print(f"  Standard FP32:     {standard_fp32_size:.1f} KB")
+    print(f"  BitNet FP32:       {fp32_size:.1f} KB")
+    print(f"  BitNet Packed:     {ternary_size:.1f} KB")
+    print(f"  Compression:       {fp32_size / ternary_size:.1f}x")
     print()
 
-    print("NOTE: BitNet is slower in PyTorch because:")
-    print("  - Quantization happens at runtime (not optimized)")
-    print("  - No custom CUDA kernels for ternary operations")
-    print("  - Real speedup requires bitnet.cpp or custom kernels")
+    # ==========================================================================
+    # 大バッチでのベンチマーク
+    # ==========================================================================
+    print("=" * 70)
+    print("Large Batch Inference Benchmark")
+    print("=" * 70)
+    print()
+
+    batch_sizes = [32, 64, 128, 256, 512]
+
+    print(f"{'Batch Size':<12} {'Standard (ms)':>14} {'Triton (ms)':>14} {'Speedup':>10}")
+    print("-" * 55)
+
+    for bs in batch_sizes:
+        test_loader_bs = DataLoader(test_dataset, batch_size=bs, shuffle=False, num_workers=2)
+
+        # Warm up
+        with torch.no_grad():
+            for images, _ in test_loader_bs:
+                _ = standard_model(images.to(device))
+                _ = triton_model(images.to(device))
+                break
+
+        # Benchmark
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        with torch.no_grad():
+            for images, _ in test_loader_bs:
+                _ = standard_model(images.to(device))
+        torch.cuda.synchronize()
+        std_time = (time.perf_counter() - start) * 1000
+
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        with torch.no_grad():
+            for images, _ in test_loader_bs:
+                _ = triton_model(images.to(device))
+        torch.cuda.synchronize()
+        tri_time = (time.perf_counter() - start) * 1000
+
+        speedup = std_time / tri_time
+        print(f"{bs:<12} {std_time:>14.2f} {tri_time:>14.2f} {speedup:>10.2f}x")
+
+    print()
+    print("NOTE:")
+    print("  - BitNet Triton uses 2-bit packed weights (16x memory compression)")
+    print("  - Speedup improves with larger batch sizes")
+    print("  - For small MNIST model, kernel overhead is significant")
 
 
 if __name__ == "__main__":
