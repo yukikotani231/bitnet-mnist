@@ -4,20 +4,20 @@ Speed and Quality comparison with standard DiT
 """
 
 import time
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
-import torch.nn.functional as F
 
-from bitnet_mnist import BitLinear, RMSNorm
 from bitnet_diffusion import BitNetDiT, GaussianDiffusion, SinusoidalPositionEmbedding
-
 
 # =============================================================================
 # Standard DiT (for comparison)
 # =============================================================================
+
 
 class StandardAttention(nn.Module):
     """Multi-head self-attention with standard Linear"""
@@ -26,7 +26,7 @@ class StandardAttention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         self.qkv = nn.Linear(dim, dim * 3)
         self.proj = nn.Linear(dim, dim)
@@ -45,7 +45,7 @@ class StandardAttention(nn.Module):
 class StandardMLP(nn.Module):
     """MLP with standard Linear"""
 
-    def __init__(self, dim: int, hidden_dim: int = None):
+    def __init__(self, dim: int, hidden_dim: int | None = None):
         super().__init__()
         hidden_dim = hidden_dim or dim * 4
         self.fc1 = nn.Linear(dim, hidden_dim)
@@ -116,9 +116,7 @@ class StandardDiT(nn.Module):
             nn.Linear(dim, dim),
         )
 
-        self.blocks = nn.ModuleList([
-            StandardDiTBlock(dim, num_heads) for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList([StandardDiTBlock(dim, num_heads) for _ in range(depth)])
 
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, patch_dim)
@@ -133,7 +131,7 @@ class StandardDiT(nn.Module):
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
         B, N, D = x.shape
         p = self.patch_size
-        h = w = int(N ** 0.5)
+        h = w = int(N**0.5)
         c = D // (p * p)
         x = x.reshape(B, h, w, c, p, p)
         x = x.permute(0, 3, 1, 4, 2, 5).reshape(B, c, h * p, w * p)
@@ -157,6 +155,7 @@ class StandardDiT(nn.Module):
 # =============================================================================
 # Benchmarks
 # =============================================================================
+
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters())
@@ -244,12 +243,12 @@ def compute_fid_proxy(model, diffusion, real_images, device, num_samples=1000):
     std_diff = abs(real_std - gen_std)
 
     return {
-        'real_mean': real_mean,
-        'real_std': real_std,
-        'gen_mean': gen_mean,
-        'gen_std': gen_std,
-        'mean_diff': mean_diff,
-        'std_diff': std_diff,
+        "real_mean": real_mean,
+        "real_std": real_std,
+        "gen_mean": gen_mean,
+        "gen_std": gen_std,
+        "mean_diff": mean_diff,
+        "std_diff": std_diff,
     }
 
 
@@ -268,13 +267,11 @@ def main():
     print("=" * 70)
 
     bitnet_dit = BitNetDiT(
-        img_size=28, patch_size=4, in_channels=1,
-        dim=256, depth=6, num_heads=4
+        img_size=28, patch_size=4, in_channels=1, dim=256, depth=6, num_heads=4
     ).to(device)
 
     standard_dit = StandardDiT(
-        img_size=28, patch_size=4, in_channels=1,
-        dim=256, depth=6, num_heads=4
+        img_size=28, patch_size=4, in_channels=1, dim=256, depth=6, num_heads=4
     ).to(device)
 
     bitnet_params = count_parameters(bitnet_dit)
@@ -285,8 +282,8 @@ def main():
 
     print(f"{'Model':<20} {'Parameters':>15} {'Size (MB)':>12}")
     print("-" * 50)
-    print(f"{'BitNet DiT':<20} {bitnet_params:>15,} {bitnet_size/1024/1024:>12.2f}")
-    print(f"{'Standard DiT':<20} {standard_params:>15,} {standard_size/1024/1024:>12.2f}")
+    print(f"{'BitNet DiT':<20} {bitnet_params:>15,} {bitnet_size / 1024 / 1024:>12.2f}")
+    print(f"{'Standard DiT':<20} {standard_params:>15,} {standard_size / 1024 / 1024:>12.2f}")
     print()
 
     # ==========================================================================
@@ -347,15 +344,17 @@ def main():
     try:
         bitnet_dit.load_state_dict(torch.load("bitnet_dit_mnist.pt", map_location=device))
         print("Loaded trained BitNet DiT model")
-    except:
+    except Exception:
         print("No trained model found, using random weights")
 
     # Load real MNIST data
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),
-    ])
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,)),
+        ]
+    )
+    test_dataset = datasets.MNIST("./data", train=False, transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False)
     real_images, _ = next(iter(test_loader))
     real_images = real_images.to(device)
@@ -383,10 +382,7 @@ def main():
     print(f"{'Max':<20} {real_images.max().item():>15.4f} {generated_samples.max().item():>15.4f}")
 
     # Save comparison image
-    comparison = torch.cat([
-        real_images[:32].cpu(),
-        generated_samples[:32].cpu()
-    ], dim=0)
+    comparison = torch.cat([real_images[:32].cpu(), generated_samples[:32].cpu()], dim=0)
     comparison = (comparison + 1) / 2  # Normalize to [0, 1]
     save_image(comparison, "quality_comparison.png", nrow=8)
     print("\nSaved quality_comparison.png (top: real, bottom: generated)")
@@ -404,10 +400,10 @@ def main():
     print("  - Full sampling: Similar performance (dominated by 1000 denoising steps)")
     print()
     print("Memory Analysis:")
-    print(f"  - Standard DiT: {standard_size/1024/1024:.2f} MB")
-    print(f"  - BitNet DiT:   {bitnet_size/1024/1024:.2f} MB")
-    print(f"  - Note: Both use FP32 during training")
-    print(f"  - BitNet potential: 16x compression with 2-bit packing")
+    print(f"  - Standard DiT: {standard_size / 1024 / 1024:.2f} MB")
+    print(f"  - BitNet DiT:   {bitnet_size / 1024 / 1024:.2f} MB")
+    print("  - Note: Both use FP32 during training")
+    print("  - BitNet potential: 16x compression with 2-bit packing")
     print()
     print("Quality Analysis:")
     print(f"  - Mean diff: {abs(real_mean - gen_mean):.4f}")

@@ -4,6 +4,7 @@ DDPM + DiT-style Transformer with BitLinear layers
 """
 
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,10 +15,10 @@ from tqdm import tqdm
 
 from bitnet_mnist import BitLinear, RMSNorm
 
-
 # =============================================================================
 # Diffusion Process (DDPM)
 # =============================================================================
+
 
 class GaussianDiffusion:
     """
@@ -29,7 +30,7 @@ class GaussianDiffusion:
         timesteps: int = 1000,
         beta_start: float = 1e-4,
         beta_end: float = 0.02,
-        device: torch.device = None,
+        device: torch.device | None = None,
     ):
         self.timesteps = timesteps
         self.device = device or torch.device("cpu")
@@ -50,7 +51,7 @@ class GaussianDiffusion:
         )
         self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
 
-    def q_sample(self, x_0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor = None):
+    def q_sample(self, x_0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor | None = None):
         """Forward diffusion: q(x_t | x_0)"""
         if noise is None:
             noise = torch.randn_like(x_0)
@@ -82,7 +83,7 @@ class GaussianDiffusion:
             return mean
 
     @torch.no_grad()
-    def sample(self, model: nn.Module, shape: tuple, device: torch.device = None):
+    def sample(self, model: nn.Module, shape: tuple, device: torch.device | None = None):
         """Generate samples from noise"""
         device = device or self.device
         model.eval()
@@ -101,6 +102,7 @@ class GaussianDiffusion:
 # Time Embedding
 # =============================================================================
 
+
 class SinusoidalPositionEmbedding(nn.Module):
     """Sinusoidal position embedding for timesteps"""
 
@@ -111,8 +113,8 @@ class SinusoidalPositionEmbedding(nn.Module):
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         device = t.device
         half_dim = self.dim // 2
-        embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        emb_scale = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -emb_scale)
         embeddings = t[:, None] * embeddings[None, :]
         embeddings = torch.cat([embeddings.sin(), embeddings.cos()], dim=-1)
         return embeddings
@@ -122,6 +124,7 @@ class SinusoidalPositionEmbedding(nn.Module):
 # DiT Blocks with BitLinear
 # =============================================================================
 
+
 class BitLinearAttention(nn.Module):
     """Multi-head self-attention with BitLinear"""
 
@@ -129,7 +132,7 @@ class BitLinearAttention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         self.qkv = BitLinear(dim, dim * 3)
         self.proj = BitLinear(dim, dim)
@@ -151,7 +154,7 @@ class BitLinearAttention(nn.Module):
 class BitLinearMLP(nn.Module):
     """MLP with BitLinear"""
 
-    def __init__(self, dim: int, hidden_dim: int = None):
+    def __init__(self, dim: int, hidden_dim: int | None = None):
         super().__init__()
         hidden_dim = hidden_dim or dim * 4
         self.fc1 = BitLinear(dim, hidden_dim)
@@ -203,6 +206,7 @@ class DiTBlock(nn.Module):
 # BitNet DiT Model
 # =============================================================================
 
+
 class BitNetDiT(nn.Module):
     """
     DiT-style diffusion model with BitLinear layers for MNIST
@@ -236,9 +240,7 @@ class BitNetDiT(nn.Module):
         )
 
         # Transformer blocks
-        self.blocks = nn.ModuleList([
-            DiTBlock(dim, num_heads) for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList([DiTBlock(dim, num_heads) for _ in range(depth)])
 
         # Output
         self.norm = RMSNorm(dim)
@@ -256,7 +258,7 @@ class BitNetDiT(nn.Module):
         """Convert patches back to image"""
         B, N, D = x.shape
         p = self.patch_size
-        h = w = int(N ** 0.5)
+        h = w = int(N**0.5)
         c = D // (p * p)
         x = x.reshape(B, h, w, c, p, p)
         x = x.permute(0, 3, 1, 4, 2, 5).reshape(B, c, h * p, w * p)
@@ -286,13 +288,14 @@ class BitNetDiT(nn.Module):
 # Training
 # =============================================================================
 
+
 def train_diffusion(
     model: nn.Module,
     diffusion: GaussianDiffusion,
     train_loader: DataLoader,
     epochs: int = 50,
     lr: float = 1e-3,
-    device: torch.device = None,
+    device: torch.device | None = None,
     save_every: int = 10,
 ):
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -349,12 +352,14 @@ def main():
     print()
 
     # Data
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),  # Normalize to [-1, 1]
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,)),  # Normalize to [-1, 1]
+        ]
+    )
 
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=transform)
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)
 
     # Model
@@ -368,7 +373,7 @@ def main():
     )
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: BitNet DiT")
+    print("Model: BitNet DiT")
     print(f"Parameters: {total_params:,}")
     print(f"Patches: {model.num_patches} (4x4 patches on 28x28)")
     print()

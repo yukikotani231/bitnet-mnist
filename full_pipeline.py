@@ -4,18 +4,19 @@ BitNet Full Pipeline Demo
 """
 
 import time
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from pathlib import Path
 
-from bitnet_mnist import BitNetMNIST, BitLinear
+from bitnet_mnist import BitLinear, BitNetMNIST
 from bitnet_packed import (
     PackedBitNetMNIST,
-    save_packed_model,
-    load_packed_model,
     get_model_memory_usage,
+    load_packed_model,
+    save_packed_model,
 )
 
 
@@ -99,13 +100,12 @@ def main():
     print(f"Device: {device}")
 
     # データ準備
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
 
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST("./data", train=False, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=2)
@@ -156,10 +156,10 @@ def main():
     optimized_path = output_dir / "bitnet_optimized.pt"
     optimized_size = save_packed_model(optimized_model, optimized_path)
 
-    print(f"FP32 model size:      {fp32_size:,} bytes ({fp32_size/1024:.1f} KB)")
-    print(f"Packed model size:    {packed_size:,} bytes ({packed_size/1024:.1f} KB)")
-    print(f"Optimized model size: {optimized_size:,} bytes ({optimized_size/1024:.1f} KB)")
-    print(f"Compression ratio:    {fp32_size/packed_size:.1f}x")
+    print(f"FP32 model size:      {fp32_size:,} bytes ({fp32_size / 1024:.1f} KB)")
+    print(f"Packed model size:    {packed_size:,} bytes ({packed_size / 1024:.1f} KB)")
+    print(f"Optimized model size: {optimized_size:,} bytes ({optimized_size / 1024:.1f} KB)")
+    print(f"Compression ratio:    {fp32_size / packed_size:.1f}x")
 
     # =========================================================================
     # Phase 3: 推論ベンチマーク
@@ -177,31 +177,33 @@ def main():
     packed_acc = evaluate(packed_loaded, test_loader, device)
     optimized_acc = evaluate(optimized_loaded, test_loader, device)
 
-    print(f"\nAccuracy comparison:")
+    print("\nAccuracy comparison:")
     print(f"  Original (FP32 weights): {train_acc:.2f}%")
     print(f"  Packed (2bit):           {packed_acc:.2f}%")
     print(f"  Optimized (no multiply): {optimized_acc:.2f}%")
 
     # 速度ベンチマーク
-    print(f"\nInference speed (5 runs average):")
+    print("\nInference speed (5 runs average):")
 
     original_time = benchmark_inference(model, test_loader, device)
     packed_time = benchmark_inference(packed_loaded, test_loader, device)
     optimized_time = benchmark_inference(optimized_loaded, test_loader, device)
 
     print(f"  Original:  {original_time:.3f}s")
-    print(f"  Packed:    {packed_time:.3f}s ({original_time/packed_time:.2f}x)")
-    print(f"  Optimized: {optimized_time:.3f}s ({original_time/optimized_time:.2f}x)")
+    print(f"  Packed:    {packed_time:.3f}s ({original_time / packed_time:.2f}x)")
+    print(f"  Optimized: {optimized_time:.3f}s ({original_time / optimized_time:.2f}x)")
 
     # メモリ使用量
-    print(f"\nRuntime memory usage:")
+    print("\nRuntime memory usage:")
     original_mem = get_model_memory_usage(model)
     packed_mem = get_model_memory_usage(packed_loaded)
     optimized_mem = get_model_memory_usage(optimized_loaded)
 
-    print(f"  Original:  {original_mem:,} bytes ({original_mem/1024:.1f} KB)")
-    print(f"  Packed:    {packed_mem:,} bytes ({packed_mem/1024:.1f} KB) - {original_mem/packed_mem:.1f}x smaller")
-    print(f"  Optimized: {optimized_mem:,} bytes ({optimized_mem/1024:.1f} KB)")
+    print(f"  Original:  {original_mem:,} bytes ({original_mem / 1024:.1f} KB)")
+    print(
+        f"  Packed:    {packed_mem:,} bytes ({packed_mem / 1024:.1f} KB) - {original_mem / packed_mem:.1f}x smaller"
+    )
+    print(f"  Optimized: {optimized_mem:,} bytes ({optimized_mem / 1024:.1f} KB)")
 
     # =========================================================================
     # Summary
@@ -214,9 +216,15 @@ def main():
     print(f"{'Metric':<25} {'Original':>12} {'Packed':>12} {'Optimized':>12}")
     print("-" * 70)
     print(f"{'Accuracy (%)':<25} {train_acc:>12.2f} {packed_acc:>12.2f} {optimized_acc:>12.2f}")
-    print(f"{'File Size (KB)':<25} {fp32_size/1024:>12.1f} {packed_size/1024:>12.1f} {optimized_size/1024:>12.1f}")
-    print(f"{'Inference Time (s)':<25} {original_time:>12.3f} {packed_time:>12.3f} {optimized_time:>12.3f}")
-    print(f"{'Memory (KB)':<25} {original_mem/1024:>12.1f} {packed_mem/1024:>12.1f} {optimized_mem/1024:>12.1f}")
+    print(
+        f"{'File Size (KB)':<25} {fp32_size / 1024:>12.1f} {packed_size / 1024:>12.1f} {optimized_size / 1024:>12.1f}"
+    )
+    print(
+        f"{'Inference Time (s)':<25} {original_time:>12.3f} {packed_time:>12.3f} {optimized_time:>12.3f}"
+    )
+    print(
+        f"{'Memory (KB)':<25} {original_mem / 1024:>12.1f} {packed_mem / 1024:>12.1f} {optimized_mem / 1024:>12.1f}"
+    )
     print()
 
     print("Notes:")
@@ -233,7 +241,7 @@ def main():
     zero_count = 0
     pos_count = 0
 
-    for name, module in model.named_modules():
+    for _name, module in model.named_modules():
         if isinstance(module, BitLinear):
             w = module.weight.data
             scale = w.abs().mean()
@@ -243,9 +251,9 @@ def main():
             zero_count += (w_q == 0).sum().item()
             pos_count += (w_q == 1).sum().item()
 
-    print(f"  -1: {neg_count:,} ({100*neg_count/total:.1f}%)")
-    print(f"   0: {zero_count:,} ({100*zero_count/total:.1f}%)")
-    print(f"  +1: {pos_count:,} ({100*pos_count/total:.1f}%)")
+    print(f"  -1: {neg_count:,} ({100 * neg_count / total:.1f}%)")
+    print(f"   0: {zero_count:,} ({100 * zero_count / total:.1f}%)")
+    print(f"  +1: {pos_count:,} ({100 * pos_count / total:.1f}%)")
 
 
 if __name__ == "__main__":

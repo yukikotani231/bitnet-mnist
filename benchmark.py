@@ -4,19 +4,20 @@ BitNet vs Standard Linear vs Triton Benchmark
 """
 
 import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from bitnet_triton import BitLinearTriton
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from bitnet_mnist import BitLinear, RMSNorm, BitNetMNIST
-from bitnet_triton import BitLinearTriton
-
+from bitnet_mnist import BitLinear, BitNetMNIST, RMSNorm
 
 # =============================================================================
 # 通常のLinearを使ったMNISTモデル（比較用）
 # =============================================================================
+
 
 class StandardMNIST(nn.Module):
     """通常のnn.Linearを使用したMNIST分類器"""
@@ -28,11 +29,9 @@ class StandardMNIST(nn.Module):
             nn.Linear(784, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
-
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
-
             nn.Linear(hidden_dim, 10),
         )
 
@@ -45,6 +44,7 @@ class StandardMNIST(nn.Module):
 # Triton版BitNet MNISTモデル
 # =============================================================================
 
+
 class BitNetMNISTTriton(nn.Module):
     """BitLinearTritonを使用したMNIST分類器"""
 
@@ -56,11 +56,9 @@ class BitNetMNISTTriton(nn.Module):
             BitLinearTriton(784, hidden_dim),
             RMSNorm(hidden_dim),
             nn.GELU(),
-
             BitLinearTriton(hidden_dim, hidden_dim),
             RMSNorm(hidden_dim),
             nn.GELU(),
-
             BitLinearTriton(hidden_dim, 10),
         )
 
@@ -75,7 +73,7 @@ class BitNetMNISTTriton(nn.Module):
                 module.pack_weights()
 
     @classmethod
-    def from_bitnet(cls, bitnet_model: BitNetMNIST) -> 'BitNetMNISTTriton':
+    def from_bitnet(cls, bitnet_model: BitNetMNIST) -> "BitNetMNISTTriton":
         """Convert BitNetMNIST to BitNetMNISTTriton"""
         hidden_dim = bitnet_model.layers[0].out_features
         triton_model = cls(hidden_dim=hidden_dim)
@@ -93,6 +91,7 @@ class BitNetMNISTTriton(nn.Module):
 # =============================================================================
 # ベンチマーク関数
 # =============================================================================
+
 
 def train_epoch(model, loader, optimizer, device):
     model.train()
@@ -200,13 +199,12 @@ def main():
     print()
 
     # データ
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
 
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST("./data", train=False, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=2)
@@ -298,9 +296,15 @@ def main():
     print()
     print(f"{'Metric':<25} {'BitNet STE':>12} {'BitNet Triton':>14} {'Standard':>12}")
     print("-" * 70)
-    print(f"{'Test Accuracy (%)':<25} {bitnet_acc:>12.2f} {triton_acc:>14.2f} {standard_acc:>12.2f}")
-    print(f"{'Training Time (s)':<25} {bitnet_train_time:>12.2f} {'N/A':>14} {standard_train_time:>12.2f}")
-    print(f"{'Inference Time (s)':<25} {bitnet_infer_time:>12.3f} {triton_infer_time:>14.3f} {standard_infer_time:>12.3f}")
+    print(
+        f"{'Test Accuracy (%)':<25} {bitnet_acc:>12.2f} {triton_acc:>14.2f} {standard_acc:>12.2f}"
+    )
+    print(
+        f"{'Training Time (s)':<25} {bitnet_train_time:>12.2f} {'N/A':>14} {standard_train_time:>12.2f}"
+    )
+    print(
+        f"{'Inference Time (s)':<25} {bitnet_infer_time:>12.3f} {triton_infer_time:>14.3f} {standard_infer_time:>12.3f}"
+    )
     print()
 
     # スピードアップ計算

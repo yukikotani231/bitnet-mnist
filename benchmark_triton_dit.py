@@ -4,22 +4,24 @@ Compare: Standard DiT vs BitNet STE vs BitNet Triton
 """
 
 import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from bitnet_triton import BitLinearTriton
 from torchvision.utils import save_image
 
-from bitnet_mnist import BitLinear, RMSNorm
 from bitnet_diffusion import (
-    BitNetDiT, GaussianDiffusion, SinusoidalPositionEmbedding,
-    BitLinearAttention, BitLinearMLP, DiTBlock
+    BitNetDiT,
+    GaussianDiffusion,
+    SinusoidalPositionEmbedding,
 )
-from bitnet_triton import BitLinearTriton
-
+from bitnet_mnist import BitLinear, RMSNorm
 
 # =============================================================================
 # Triton-optimized DiT components
 # =============================================================================
+
 
 class BitLinearAttentionTriton(nn.Module):
     """Multi-head self-attention with BitLinearTriton"""
@@ -28,7 +30,7 @@ class BitLinearAttentionTriton(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         self.qkv = BitLinearTriton(dim, dim * 3)
         self.proj = BitLinearTriton(dim, dim)
@@ -47,7 +49,7 @@ class BitLinearAttentionTriton(nn.Module):
 class BitLinearMLPTriton(nn.Module):
     """MLP with BitLinearTriton"""
 
-    def __init__(self, dim: int, hidden_dim: int = None):
+    def __init__(self, dim: int, hidden_dim: int | None = None):
         super().__init__()
         hidden_dim = hidden_dim or dim * 4
         self.fc1 = BitLinearTriton(dim, hidden_dim)
@@ -121,9 +123,7 @@ class BitNetDiTTriton(nn.Module):
         )
 
         # Transformer blocks with Triton
-        self.blocks = nn.ModuleList([
-            DiTBlockTriton(dim, num_heads) for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList([DiTBlockTriton(dim, num_heads) for _ in range(depth)])
 
         self.norm = RMSNorm(dim)
         self.head = nn.Linear(dim, patch_dim)
@@ -138,7 +138,7 @@ class BitNetDiTTriton(nn.Module):
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
         B, N, D = x.shape
         p = self.patch_size
-        h = w = int(N ** 0.5)
+        h = w = int(N**0.5)
         c = D // (p * p)
         x = x.reshape(B, h, w, c, p, p)
         x = x.permute(0, 3, 1, 4, 2, 5).reshape(B, c, h * p, w * p)
@@ -165,7 +165,7 @@ class BitNetDiTTriton(nn.Module):
                 module.pack_weights()
 
     @classmethod
-    def from_bitnet_dit(cls, bitnet_model: BitNetDiT) -> 'BitNetDiTTriton':
+    def from_bitnet_dit(cls, bitnet_model: BitNetDiT) -> "BitNetDiTTriton":
         """Convert trained BitNetDiT to BitNetDiTTriton"""
         triton_model = cls(
             img_size=bitnet_model.img_size,
@@ -206,12 +206,13 @@ class BitNetDiTTriton(nn.Module):
 # Standard DiT (FP32 baseline)
 # =============================================================================
 
+
 class StandardAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 4):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3)
         self.proj = nn.Linear(dim, dim)
 
@@ -227,7 +228,7 @@ class StandardAttention(nn.Module):
 
 
 class StandardMLP(nn.Module):
-    def __init__(self, dim: int, hidden_dim: int = None):
+    def __init__(self, dim: int, hidden_dim: int | None = None):
         super().__init__()
         hidden_dim = hidden_dim or dim * 4
         self.fc1 = nn.Linear(dim, hidden_dim)
@@ -270,7 +271,9 @@ class StandardDiT(nn.Module):
         self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches, dim) * 0.02)
         self.time_embed = nn.Sequential(
             SinusoidalPositionEmbedding(dim),
-            nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, dim),
+            nn.Linear(dim, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim),
         )
         self.blocks = nn.ModuleList([StandardDiTBlock(dim, num_heads) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
@@ -279,12 +282,16 @@ class StandardDiT(nn.Module):
     def patchify(self, x):
         B, C, H, W = x.shape
         p = self.patch_size
-        return x.reshape(B, C, H // p, p, W // p, p).permute(0, 2, 4, 1, 3, 5).reshape(B, -1, C * p * p)
+        return (
+            x.reshape(B, C, H // p, p, W // p, p)
+            .permute(0, 2, 4, 1, 3, 5)
+            .reshape(B, -1, C * p * p)
+        )
 
     def unpatchify(self, x):
         B, N, D = x.shape
         p = self.patch_size
-        h = w = int(N ** 0.5)
+        h = w = int(N**0.5)
         c = D // (p * p)
         return x.reshape(B, h, w, c, p, p).permute(0, 3, 1, 4, 2, 5).reshape(B, c, h * p, w * p)
 
@@ -299,6 +306,7 @@ class StandardDiT(nn.Module):
 # =============================================================================
 # Benchmarks
 # =============================================================================
+
 
 def benchmark_forward(model, x, t, num_warmup=20, num_runs=100):
     model.eval()
@@ -364,7 +372,7 @@ def main():
     try:
         bitnet_dit.load_state_dict(torch.load("bitnet_dit_mnist.pt", map_location=device))
         print(f"BitNet DiT (STE): {get_memory_usage(bitnet_dit):.2f} MB [trained]")
-    except:
+    except Exception:
         print(f"BitNet DiT (STE): {get_memory_usage(bitnet_dit):.2f} MB [random]")
 
     # 3. BitNet DiT Triton (optimized inference)
@@ -394,7 +402,9 @@ def main():
         time_tri = benchmark_forward(triton_dit, x, t)
 
         speedup = time_std / time_tri
-        print(f"{bs:<8} {time_std:>10.2f}ms {time_ste:>10.2f}ms {time_tri:>10.2f}ms {speedup:>13.2f}x")
+        print(
+            f"{bs:<8} {time_std:>10.2f}ms {time_ste:>10.2f}ms {time_tri:>10.2f}ms {speedup:>13.2f}x"
+        )
 
     print()
 
@@ -407,7 +417,9 @@ def main():
 
     diffusion = GaussianDiffusion(timesteps=1000, device=device)
 
-    print(f"{'Samples':<8} {'Standard':>12} {'BitNet STE':>12} {'Triton':>12} {'Triton vs Std':>14}")
+    print(
+        f"{'Samples':<8} {'Standard':>12} {'BitNet STE':>12} {'Triton':>12} {'Triton vs Std':>14}"
+    )
     print("-" * 62)
 
     for num_samples in [1, 4, 16]:
@@ -418,7 +430,9 @@ def main():
         time_tri = benchmark_sampling(triton_dit, diffusion, shape, device)
 
         speedup = time_std / time_tri
-        print(f"{num_samples:<8} {time_std:>11.2f}s {time_ste:>11.2f}s {time_tri:>11.2f}s {speedup:>13.2f}x")
+        print(
+            f"{num_samples:<8} {time_std:>11.2f}s {time_ste:>11.2f}s {time_tri:>11.2f}s {speedup:>13.2f}x"
+        )
 
     print()
 
@@ -461,17 +475,22 @@ def main():
 
     # Count BitLinear parameters
     bitlinear_params = sum(
-        p.numel() for m in bitnet_dit.modules()
-        if isinstance(m, BitLinear) for p in m.parameters()
+        p.numel() for m in bitnet_dit.modules() if isinstance(m, BitLinear) for p in m.parameters()
     )
     total_params = sum(p.numel() for p in bitnet_dit.parameters())
 
     print(f"Total parameters:      {total_params:,}")
-    print(f"BitLinear parameters:  {bitlinear_params:,} ({100*bitlinear_params/total_params:.1f}%)")
+    print(
+        f"BitLinear parameters:  {bitlinear_params:,} ({100 * bitlinear_params / total_params:.1f}%)"
+    )
     print()
     print(f"FP32 size:             {total_params * 4 / 1024 / 1024:.2f} MB")
-    print(f"2-bit packed size:     {bitlinear_params * 2 / 8 / 1024 / 1024:.2f} MB (BitLinear only)")
-    print(f"Theoretical min:       {(total_params - bitlinear_params) * 4 / 1024 / 1024 + bitlinear_params * 2 / 8 / 1024 / 1024:.2f} MB")
+    print(
+        f"2-bit packed size:     {bitlinear_params * 2 / 8 / 1024 / 1024:.2f} MB (BitLinear only)"
+    )
+    print(
+        f"Theoretical min:       {(total_params - bitlinear_params) * 4 / 1024 / 1024 + bitlinear_params * 2 / 8 / 1024 / 1024:.2f} MB"
+    )
     print()
 
     # ==========================================================================

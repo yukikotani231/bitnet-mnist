@@ -9,10 +9,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-
 # =============================================================================
 # BitLinear: BitNet b1.58 の核心部分
 # =============================================================================
+
 
 class BitLinear(nn.Linear):
     """
@@ -70,6 +70,7 @@ class BitLinear(nn.Linear):
 # RMSNorm: BitNetで推奨される正規化層
 # =============================================================================
 
+
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization"""
 
@@ -87,6 +88,7 @@ class RMSNorm(nn.Module):
 # BitNet MNIST Model
 # =============================================================================
 
+
 class BitNetMNIST(nn.Module):
     """
     BitNetを使用したMNIST分類器
@@ -102,11 +104,9 @@ class BitNetMNIST(nn.Module):
             BitLinear(784, hidden_dim),
             RMSNorm(hidden_dim),
             nn.GELU(),
-
             BitLinear(hidden_dim, hidden_dim),
             RMSNorm(hidden_dim),
             nn.GELU(),
-
             BitLinear(hidden_dim, 10),
         )
 
@@ -119,7 +119,10 @@ class BitNetMNIST(nn.Module):
 # 学習・評価
 # =============================================================================
 
-def train_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, device: torch.device) -> float:
+
+def train_epoch(
+    model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, device: torch.device
+) -> float:
     model.train()
     total_loss = 0.0
 
@@ -163,16 +166,16 @@ def count_ternary_weights(model: nn.Module) -> dict:
     """量子化後の重みの分布を確認"""
     stats = {"total": 0, "-1": 0, "0": 0, "1": 0}
 
-    for name, module in model.named_modules():
+    for _name, module in model.named_modules():
         if isinstance(module, BitLinear):
             w = module.weight
             scale = w.abs().mean().clamp(min=1e-5)
             w_quantized = torch.clamp(torch.round(w / scale), -1, 1)
 
             stats["total"] += w_quantized.numel()
-            stats["-1"] += (w_quantized == -1).sum().item()
-            stats["0"] += (w_quantized == 0).sum().item()
-            stats["1"] += (w_quantized == 1).sum().item()
+            stats["-1"] += int((w_quantized == -1).sum().item())
+            stats["0"] += int((w_quantized == 0).sum().item())
+            stats["1"] += int((w_quantized == 1).sum().item())
 
     return stats
 
@@ -188,13 +191,12 @@ def main():
     hidden_dim = 512
 
     # データセット
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
 
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST("./data", train=False, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
@@ -218,7 +220,9 @@ def main():
         train_loss = train_epoch(model, train_loader, optimizer, device)
         test_loss, test_acc = evaluate(model, test_loader, device)
 
-        print(f"Epoch {epoch:2d} | Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}%")
+        print(
+            f"Epoch {epoch:2d} | Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}%"
+        )
 
     # 最終結果
     print()
@@ -234,17 +238,17 @@ def main():
     print()
     print("Weight distribution (quantized):")
     print(f"  Total weights: {stats['total']:,}")
-    print(f"  -1: {stats['-1']:,} ({100*stats['-1']/stats['total']:.1f}%)")
-    print(f"   0: {stats['0']:,} ({100*stats['0']/stats['total']:.1f}%)")
-    print(f"  +1: {stats['1']:,} ({100*stats['1']/stats['total']:.1f}%)")
+    print(f"  -1: {stats['-1']:,} ({100 * stats['-1'] / stats['total']:.1f}%)")
+    print(f"   0: {stats['0']:,} ({100 * stats['0'] / stats['total']:.1f}%)")
+    print(f"  +1: {stats['1']:,} ({100 * stats['1'] / stats['total']:.1f}%)")
 
     # 理論的なメモリ削減量
-    fp32_size = stats['total'] * 4  # 4 bytes per float32
-    ternary_size = stats['total'] * 2 / 8  # 2 bits per weight
+    fp32_size = stats["total"] * 4  # 4 bytes per float32
+    ternary_size = stats["total"] * 2 / 8  # 2 bits per weight
     print()
-    print(f"Memory (theoretical):")
+    print("Memory (theoretical):")
     print(f"  FP32:    {fp32_size / 1024:.1f} KB")
-    print(f"  Ternary: {ternary_size / 1024:.1f} KB ({ternary_size/fp32_size*100:.1f}%)")
+    print(f"  Ternary: {ternary_size / 1024:.1f} KB ({ternary_size / fp32_size * 100:.1f}%)")
 
 
 if __name__ == "__main__":

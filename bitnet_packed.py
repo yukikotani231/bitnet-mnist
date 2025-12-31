@@ -3,16 +3,16 @@ BitNet Packed Inference
 2bitパッキングされた重みでの推論実装
 """
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from pathlib import Path
-
 
 # =============================================================================
 # 2bit Packing Utilities
 # =============================================================================
+
 
 def pack_ternary_weights(weight: torch.Tensor) -> tuple[torch.Tensor, float]:
     """
@@ -42,7 +42,9 @@ def pack_ternary_weights(weight: torch.Tensor) -> tuple[torch.Tensor, float]:
     # in_featuresを16の倍数にパディング
     padded_in = ((in_features + 15) // 16) * 16
     if padded_in > in_features:
-        w_mapped = F.pad(w_mapped, (0, padded_in - in_features), value=1)  # 0でパディング（元の値は1=ゼロ）
+        w_mapped = F.pad(
+            w_mapped, (0, padded_in - in_features), value=1
+        )  # 0でパディング（元の値は1=ゼロ）
 
     # リシェイプしてパック
     w_reshaped = w_mapped.view(out_features, -1, 16)
@@ -55,7 +57,9 @@ def pack_ternary_weights(weight: torch.Tensor) -> tuple[torch.Tensor, float]:
     return packed, scale
 
 
-def unpack_ternary_weights(packed: torch.Tensor, scale: float, original_in_features: int) -> torch.Tensor:
+def unpack_ternary_weights(
+    packed: torch.Tensor, scale: float, original_in_features: int
+) -> torch.Tensor:
     """
     パッキングされた重みを展開
 
@@ -88,6 +92,7 @@ def unpack_ternary_weights(packed: torch.Tensor, scale: float, original_in_featu
 # Packed BitLinear Layer (推論専用)
 # =============================================================================
 
+
 class PackedBitLinear(nn.Module):
     """
     2bitパッキングされた重みを使用する推論専用レイヤー
@@ -100,8 +105,10 @@ class PackedBitLinear(nn.Module):
 
         # パッキングされた重み
         packed_in = (in_features + 15) // 16
-        self.register_buffer('packed_weight', torch.zeros(out_features, packed_in, dtype=torch.int32))
-        self.register_buffer('scale', torch.tensor(1.0))
+        self.register_buffer(
+            "packed_weight", torch.zeros(out_features, packed_in, dtype=torch.int32)
+        )
+        self.register_buffer("scale", torch.tensor(1.0))
 
     def load_from_bitlinear(self, bitlinear: nn.Module):
         """BitLinearレイヤーから重みをロード"""
@@ -111,11 +118,9 @@ class PackedBitLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 重みを展開（推論時のみ）
-        weight = unpack_ternary_weights(
-            self.packed_weight,
-            self.scale.item(),
-            self.in_features
-        ).to(x.device)
+        weight = unpack_ternary_weights(self.packed_weight, self.scale.item(), self.in_features).to(
+            x.device
+        )
 
         # 入力のスケーリング
         x_scale = x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
@@ -131,6 +136,7 @@ class PackedBitLinear(nn.Module):
 # Optimized Packed BitLinear (加減算のみ)
 # =============================================================================
 
+
 class OptimizedPackedBitLinear(nn.Module):
     """
     乗算を使わない最適化されたBitLinear
@@ -143,9 +149,13 @@ class OptimizedPackedBitLinear(nn.Module):
         self.out_features = out_features
 
         # 正と負の重みをマスクとして保持
-        self.register_buffer('positive_mask', torch.zeros(out_features, in_features, dtype=torch.bool))
-        self.register_buffer('negative_mask', torch.zeros(out_features, in_features, dtype=torch.bool))
-        self.register_buffer('scale', torch.tensor(1.0))
+        self.register_buffer(
+            "positive_mask", torch.zeros(out_features, in_features, dtype=torch.bool)
+        )
+        self.register_buffer(
+            "negative_mask", torch.zeros(out_features, in_features, dtype=torch.bool)
+        )
+        self.register_buffer("scale", torch.tensor(1.0))
 
     def load_from_bitlinear(self, bitlinear: nn.Module):
         """BitLinearレイヤーから重みをロード"""
@@ -167,8 +177,6 @@ class OptimizedPackedBitLinear(nn.Module):
         # y = W @ x where W ∈ {-1, 0, 1}
         # y[i] = sum(x[j] for j where W[i,j]=1) - sum(x[j] for j where W[i,j]=-1)
 
-        batch_size = x_scaled.shape[0]
-
         # positive_mask: [out, in], x_scaled: [batch, in]
         # 結果: [batch, out]
         pos_sum = torch.mm(x_scaled, self.positive_mask.float().T)
@@ -183,13 +191,14 @@ class OptimizedPackedBitLinear(nn.Module):
 # RMSNorm (inference mode)
 # =============================================================================
 
+
 class RMSNormInference(nn.Module):
     """推論用RMSNorm"""
 
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.register_buffer('weight', torch.ones(dim))
+        self.register_buffer("weight", torch.ones(dim))
 
     def load_from_rmsnorm(self, rmsnorm: nn.Module):
         self.weight.copy_(rmsnorm.weight.data)
@@ -202,6 +211,7 @@ class RMSNormInference(nn.Module):
 # =============================================================================
 # Packed MNIST Model
 # =============================================================================
+
 
 class PackedBitNetMNIST(nn.Module):
     """
@@ -242,7 +252,6 @@ class PackedBitNetMNIST(nn.Module):
     @classmethod
     def from_trained_model(cls, trained_model: nn.Module, optimized: bool = False):
         """学習済みモデルからパッキングモデルを作成"""
-        from bitnet_mnist import BitLinear, RMSNorm
 
         # hidden_dimを取得
         hidden_dim = trained_model.layers[0].out_features
@@ -253,10 +262,10 @@ class PackedBitNetMNIST(nn.Module):
         layers = list(trained_model.layers.children())
 
         packed_model.linear1.load_from_bitlinear(layers[0])  # BitLinear
-        packed_model.norm1.load_from_rmsnorm(layers[1])      # RMSNorm
+        packed_model.norm1.load_from_rmsnorm(layers[1])  # RMSNorm
 
         packed_model.linear2.load_from_bitlinear(layers[3])  # BitLinear
-        packed_model.norm2.load_from_rmsnorm(layers[4])      # RMSNorm
+        packed_model.norm2.load_from_rmsnorm(layers[4])  # RMSNorm
 
         packed_model.linear3.load_from_bitlinear(layers[6])  # BitLinear
 
@@ -267,12 +276,13 @@ class PackedBitNetMNIST(nn.Module):
 # モデルの保存と読み込み
 # =============================================================================
 
+
 def save_packed_model(model: PackedBitNetMNIST, path: str):
     """パッキングされたモデルを保存"""
     state = {
-        'hidden_dim': model.hidden_dim,
-        'optimized': model.optimized,
-        'state_dict': model.state_dict(),
+        "hidden_dim": model.hidden_dim,
+        "optimized": model.optimized,
+        "state_dict": model.state_dict(),
     }
     torch.save(state, path)
 
@@ -283,11 +293,8 @@ def save_packed_model(model: PackedBitNetMNIST, path: str):
 def load_packed_model(path: str) -> PackedBitNetMNIST:
     """パッキングされたモデルを読み込み"""
     state = torch.load(path, weights_only=True)
-    model = PackedBitNetMNIST(
-        hidden_dim=state['hidden_dim'],
-        optimized=state['optimized']
-    )
-    model.load_state_dict(state['state_dict'])
+    model = PackedBitNetMNIST(hidden_dim=state["hidden_dim"], optimized=state["optimized"])
+    model.load_state_dict(state["state_dict"])
     return model
 
 

@@ -11,8 +11,15 @@ dependencies = [
     "tqdm>=4.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.8.0",
+    "pytest>=7.4.0",
+]
+
 [tool.uv.sources]
-bitnet-triton = { path = "../bitnet-triton", editable = true }
+bitnet-triton = { git = "https://github.com/yukikotani231/bitnet-triton.git" }
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
 
@@ -20,3 +27,44 @@ torchvision = { index = "pytorch-cu128" }
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+# Ruff
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["models"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# Mypy
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+check_untyped_defs = false
+
+# These modules have complex PyTorch typing issues (ModuleList/Sequential indexing
+# returns Tensor|Module union, get_buffer/get_parameter typing, etc.)
+[[tool.mypy.overrides]]
+module = [
+    "bitnet_packed",
+    "benchmark",
+    "benchmark_triton_dit",
+]
+ignore_errors = true
+
+# Pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v"
